@@ -264,6 +264,7 @@ export default function PartnerApiDocsPage() {
                   <li>API key hanya ditampilkan sekali saat dibuat atau di-rotate.</li>
                   <li>Jika key kadaluarsa atau dicabut, semua request akan ditolak.</li>
                   <li>Beberapa key bisa dibatasi berdasarkan domain, IP, scope, dan rate limit.</li>
+                  <li>Jika field <code>domain</code> tidak dikirim saat create alias, server akan memilih domain aktif yang diizinkan oleh API key.</li>
                 </ul>
               </div>
 
