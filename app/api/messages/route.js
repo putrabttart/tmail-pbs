@@ -8,7 +8,8 @@ export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const alias = searchParams.get('alias') || '';
-    const payload = await listMessages(alias);
+    const pin = searchParams.get('pin') || '';
+    const payload = await listMessages(alias, { pin });
     return respond(payload);
   } catch (err) {
     return handleError(err);

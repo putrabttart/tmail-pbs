@@ -68,6 +68,10 @@ function hasActiveFilterConfig(config = {}) {
   );
 }
 
+function hasAliasConfig(row) {
+  return hasActiveFilterConfig(row?.filterConfig || {}) || Boolean(row?.pinHash);
+}
+
 function paginateRows(rows, page, pageSize) {
   const total = rows.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -119,6 +123,9 @@ export default function AdminPage() {
   const [aliasSenderIncludes, setAliasSenderIncludes] = useState('');
   const [aliasKeywordIncludes, setAliasKeywordIncludes] = useState('');
   const [aliasCustomRegex, setAliasCustomRegex] = useState('');
+  const [aliasPin, setAliasPin] = useState('');
+  const [aliasFilterOpen, setAliasFilterOpen] = useState(false);
+  const [aliasListTab, setAliasListTab] = useState('all');
   const [inboxAlias, setInboxAlias] = useState('');
   const [inboxMessages, setInboxMessages] = useState([]);
   const [inboxLoading, setInboxLoading] = useState(false);
@@ -288,6 +295,7 @@ export default function AdminPage() {
         hits: a.hits || 0,
         active: a.active !== false,
         filterConfig: a.filterConfig || {},
+        pinHash: a.pinHash || null,
         totalEmails: activity?.totalEmails || 0,
         latestSeenAt: activity?.latestSeenAt || null,
         latestSubject: activity?.latestSubject || '-',
@@ -630,6 +638,7 @@ export default function AdminPage() {
     setAliasSenderIncludes('');
     setAliasKeywordIncludes('');
     setAliasCustomRegex('');
+    setAliasPin('');
   }
 
   function editAliasFilter(row) {
@@ -652,6 +661,7 @@ export default function AdminPage() {
 
     const payload = {
       address,
+      pin: aliasPin.trim() || null,
       filterConfig: {
         subjectExact: splitFilterInput(aliasSubjectExact),
         subjectIncludes: splitFilterInput(aliasSubjectIncludes),
@@ -668,7 +678,7 @@ export default function AdminPage() {
         body: JSON.stringify(payload)
       });
       await loadAll();
-      setToast('Filter alias berhasil disimpan');
+      setToast('Filter alias berhasil disimpan' + (aliasPin.trim() ? ' (dengan PIN)' : ''));
       if (!inboxAlias) setInboxAlias(address);
     } catch (err) {
       setToast(localizeErrorMessage(err?.message) || 'Gagal menyimpan filter alias');
@@ -1262,418 +1272,562 @@ export default function AdminPage() {
 
         {section === 'aliases' && (
           <div className="admin-section-stack">
+            {/* === Form Buat Alias === */}
             <div className="admin-panel">
               <div className="admin-panel-header">
-                <h5 className="mb-0">Buat Alias + Atur Filter Email</h5>
+                <h5 className="mb-0"><i className="bi bi-plus-circle me-2" />Buat Alias Baru</h5>
               </div>
-              <p className="small text-muted mb-3">
-                Pengguna umum akan menerima email berdasarkan aturan filter yang Anda tetapkan di alias ini.
-              </p>
-              <div className="mb-3">
-                <button className="btn btn-sm btn-outline-secondary" type="button" onClick={applyNetflixPreset}>
-                  <i className="bi bi-lightning-charge me-1" />Preset OTP Netflix
-                </button>
-              </div>
-              <div className="admin-filter-form">
-                <div className="row g-2">
-                  <div className="col-12 col-lg-6">
-                    <label className="form-label small mb-1">Alamat Alias</label>
-                    <input
-                      className="form-control form-control-sm"
-                      placeholder="promo@domain.com"
-                      value={aliasFormAddress}
-                      onChange={(e) => setAliasFormAddress(e.target.value)}
-                    />
-                  </div>
-                  <div className="col-12 col-lg-6">
-                    <label className="form-label small mb-1">Subjek Persis (allowlist ketat)</label>
-                    <input
-                      className="form-control form-control-sm"
-                      placeholder="kode akses sementaramu"
-                      value={aliasSubjectExact}
-                      onChange={(e) => setAliasSubjectExact(e.target.value)}
-                    />
-                  </div>
-                  <div className="col-12 col-lg-6">
-                    <label className="form-label small mb-1">Subjek Mengandung (pisahkan koma)</label>
-                    <input
-                      className="form-control form-control-sm"
-                      placeholder="kode akses, verifikasi, login"
-                      value={aliasSubjectIncludes}
-                      onChange={(e) => setAliasSubjectIncludes(e.target.value)}
-                    />
-                  </div>
-                  <div className="col-12 col-lg-6">
-                    <label className="form-label small mb-1">Subjek Dikecualikan</label>
-                    <input
-                      className="form-control form-control-sm"
-                      placeholder="newsletter, promosi"
-                      value={aliasSubjectExcludes}
-                      onChange={(e) => setAliasSubjectExcludes(e.target.value)}
-                    />
-                  </div>
-                  <div className="col-12 col-lg-6">
-                    <label className="form-label small mb-1">Pengirim Mengandung</label>
-                    <input
-                      className="form-control form-control-sm"
-                      placeholder="no-reply@x.com, keamanan"
-                      value={aliasSenderIncludes}
-                      onChange={(e) => setAliasSenderIncludes(e.target.value)}
-                    />
-                  </div>
-                  <div className="col-12 col-lg-6">
-                    <label className="form-label small mb-1">Kata Kunci (subjek/pengirim/snippet)</label>
-                    <input
-                      className="form-control form-control-sm"
-                      placeholder="kode verifikasi, akun"
-                      value={aliasKeywordIncludes}
-                      onChange={(e) => setAliasKeywordIncludes(e.target.value)}
-                    />
-                  </div>
-                  <div className="col-12 col-lg-6">
-                    <label className="form-label small mb-1">Regex Kustom (opsional)</label>
-                    <input
-                      className="form-control form-control-sm"
-                      placeholder="(otp|code)\\s*[:#-]?\\s*[A-Z0-9-]{4,10}"
-                      value={aliasCustomRegex}
-                      onChange={(e) => setAliasCustomRegex(e.target.value)}
-                    />
-                  </div>
+
+              <div className="p-4">
+                {/* === Alamat Email - Style seperti halaman user === */}
+                <label className="form-label fw-bold mb-2" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--bs-secondary-color)' }}>
+                  Alamat Email Anda
+                </label>
+
+                {/* Input group besar */}
+                <div style={{
+                  display: 'flex', alignItems: 'stretch',
+                  border: '1.5px solid var(--bs-border-color)', borderRadius: '12px',
+                  overflow: 'hidden', background: 'var(--bs-tertiary-bg)', marginBottom: '0.75rem',
+                }}>
+                  <input
+                    value={aliasFormAddress.split('@')[0] || ''}
+                    onChange={(e) => {
+                      const domain = aliasFormAddress.includes('@') ? aliasFormAddress.split('@')[1] : (activeDomains[0]?.name || '');
+                      setAliasFormAddress(e.target.value.replace(/\s+/g, '').toLowerCase() + (domain ? '@' + domain : ''));
+                    }}
+                    style={{
+                      flex: 1, border: 'none', background: 'transparent',
+                      padding: '0.875rem 1rem', fontSize: '1rem', fontWeight: 500,
+                      outline: 'none', minWidth: 0,
+                    }}
+                    placeholder="username"
+                    spellCheck="false"
+                  />
+                  <span style={{ padding: '0 0.5rem', display: 'flex', alignItems: 'center', fontSize: '1rem', color: 'var(--bs-secondary-color)', fontWeight: 600 }}>@</span>
+                  <select
+                    value={aliasFormAddress.includes('@') ? aliasFormAddress.split('@')[1] : ''}
+                    onChange={(e) => {
+                      const local = aliasFormAddress.split('@')[0] || '';
+                      setAliasFormAddress(local + '@' + e.target.value);
+                    }}
+                    style={{
+                      border: 'none', background: 'transparent',
+                      padding: '0.875rem 0.75rem', fontSize: '0.95rem', fontWeight: 500,
+                      outline: 'none', cursor: 'pointer', maxWidth: 200, minWidth: 120,
+                      appearance: 'none', WebkitAppearance: 'none',
+                    }}
+                  >
+                    {activeDomains.length === 0 && <option value="">-</option>}
+                    {activeDomains.map((d) => (
+                      <option key={d.name} value={d.name}>{d.name}</option>
+                    ))}
+                  </select>
                 </div>
-                <div className="admin-filter-form-actions">
-                  <button className="btn btn-sm btn-primary" onClick={saveAliasFilter} disabled={loading}>
-                    <i className="bi bi-floppy me-1" />Simpan Filter
+
+                {/* Actions row */}
+                <div className="d-flex gap-2 mb-3" style={{ flexWrap: 'wrap' }}>
+                  <button
+                    className="btn btn-primary"
+                    style={{ borderRadius: '10px', padding: '0.6rem 1.25rem', fontWeight: 600, fontSize: '0.9rem' }}
+                    onClick={saveAliasFilter}
+                    disabled={loading || !aliasFormAddress.includes('@')}
+                  >
+                    <i className="bi bi-floppy me-2" />Simpan Alias
                   </button>
-                  <button className="btn btn-sm btn-outline-secondary" onClick={resetAliasForm}>
-                    <i className="bi bi-eraser me-1" />Bersihkan Form
+                  <button
+                    className="btn btn-outline-primary"
+                    style={{ borderRadius: '10px', padding: '0.6rem 1rem', fontWeight: 600, fontSize: '0.9rem' }}
+                    type="button"
+                    onClick={() => {
+                      const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+                      let rand = '';
+                      for (let i = 0; i < 10; i++) rand += chars[Math.floor(Math.random() * chars.length)];
+                      const domain = aliasFormAddress.includes('@') ? aliasFormAddress.split('@')[1] : (activeDomains[0]?.name || '');
+                      setAliasFormAddress(rand + (domain ? '@' + domain : ''));
+                    }}
+                  >
+                    <i className="bi bi-shuffle me-1" />Acak
                   </button>
+                  <button
+                    className="btn btn-outline-secondary"
+                    style={{ borderRadius: '10px', padding: '0.6rem 1rem', fontWeight: 600, fontSize: '0.9rem' }}
+                    onClick={resetAliasForm}
+                  >
+                    <i className="bi bi-eraser me-1" />Reset
+                  </button>
+                </div>
+
+                {/* Preview alamat */}
+                {aliasFormAddress && aliasFormAddress.includes('@') && (
+                  <div className="rounded-3 px-3 py-2 mb-3" style={{ background: 'rgba(var(--bs-primary-rgb), 0.06)', border: '1px solid rgba(var(--bs-primary-rgb), 0.15)', fontFamily: 'monospace', fontSize: '0.9rem' }}>
+                    <i className="bi bi-envelope-fill text-primary me-2" />{aliasFormAddress}
+                  </div>
+                )}
+
+                {/* === PIN Proteksi === */}
+                <div className="mb-3">
+                  <label className="form-label fw-bold mb-2" style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--bs-secondary-color)' }}>
+                    <i className="bi bi-shield-lock me-1" />PIN Proteksi
+                  </label>
+                  <div style={{
+                    display: 'flex', alignItems: 'stretch',
+                    border: '1.5px solid var(--bs-border-color)', borderRadius: '12px',
+                    overflow: 'hidden', background: 'var(--bs-tertiary-bg)',
+                    maxWidth: 360,
+                  }}>
+                    <span style={{ padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', color: 'var(--bs-secondary-color)' }}>
+                      <i className="bi bi-lock" />
+                    </span>
+                    <input
+                      value={aliasPin}
+                      onChange={(e) => setAliasPin(e.target.value)}
+                      style={{
+                        flex: 1, border: 'none', background: 'transparent',
+                        padding: '0.75rem 0.5rem', fontSize: '1rem', fontWeight: 500,
+                        outline: 'none', letterSpacing: '0.1em',
+                      }}
+                      placeholder="Kosongkan jika tidak pakai"
+                      type="text"
+                      autoComplete="off"
+                    />
+                  </div>
+                  <small className="text-muted d-block mt-1">User harus masukkan PIN ini untuk membuka inbox alias.</small>
+                </div>
+
+                {/* Filter - React-controlled toggle */}
+                <div className="mb-3">
+                  <button
+                    className="btn btn-sm w-100 d-flex align-items-center justify-content-between"
+                    type="button"
+                    onClick={() => setAliasFilterOpen((v) => !v)}
+                    style={{
+                      background: aliasFilterOpen ? 'rgba(var(--bs-primary-rgb), 0.08)' : 'var(--bs-tertiary-bg)',
+                      border: aliasFilterOpen ? '1px solid rgba(var(--bs-primary-rgb), 0.25)' : '1px solid var(--bs-border-color)',
+                      borderRadius: '8px',
+                      padding: '0.6rem 1rem',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    <span style={{ fontWeight: 500, fontSize: '0.85rem' }}>
+                      <i className={`bi ${aliasFilterOpen ? 'bi-funnel-fill text-primary' : 'bi-funnel'} me-2`} />
+                      Filter Email {aliasFilterOpen ? '' : '(opsional)'}
+                    </span>
+                    <i className={`bi bi-chevron-${aliasFilterOpen ? 'up' : 'down'} text-muted`} style={{ fontSize: '0.75rem' }} />
+                  </button>
+                  {aliasFilterOpen && (
+                    <div className="mt-2 p-3 rounded-3" style={{ background: 'var(--bs-tertiary-bg)', border: '1px solid var(--bs-border-color)' }}>
+                      <div className="d-flex align-items-center justify-content-between mb-3">
+                        <span className="small fw-bold text-muted">Aturan Filter</span>
+                        <button className="btn btn-xs btn-outline-info" type="button" onClick={applyNetflixPreset}>
+                          <i className="bi bi-lightning-charge me-1" />Preset Netflix
+                        </button>
+                      </div>
+                      <div className="row g-2">
+                        <div className="col-12 col-md-6">
+                          <label className="form-label small mb-1">Subjek Persis</label>
+                          <input className="form-control form-control-sm" placeholder="kode akses sementaramu" value={aliasSubjectExact} onChange={(e) => setAliasSubjectExact(e.target.value)} />
+                        </div>
+                        <div className="col-12 col-md-6">
+                          <label className="form-label small mb-1">Subjek Mengandung</label>
+                          <input className="form-control form-control-sm" placeholder="kode akses, verifikasi" value={aliasSubjectIncludes} onChange={(e) => setAliasSubjectIncludes(e.target.value)} />
+                        </div>
+                        <div className="col-12 col-md-6">
+                          <label className="form-label small mb-1">Subjek Dikecualikan</label>
+                          <input className="form-control form-control-sm" placeholder="newsletter, promosi" value={aliasSubjectExcludes} onChange={(e) => setAliasSubjectExcludes(e.target.value)} />
+                        </div>
+                        <div className="col-12 col-md-6">
+                          <label className="form-label small mb-1">Pengirim Mengandung</label>
+                          <input className="form-control form-control-sm" placeholder="no-reply@x.com" value={aliasSenderIncludes} onChange={(e) => setAliasSenderIncludes(e.target.value)} />
+                        </div>
+                        <div className="col-12 col-md-6">
+                          <label className="form-label small mb-1">Kata Kunci</label>
+                          <input className="form-control form-control-sm" placeholder="kode verifikasi, akun" value={aliasKeywordIncludes} onChange={(e) => setAliasKeywordIncludes(e.target.value)} />
+                        </div>
+                        <div className="col-12 col-md-6">
+                          <label className="form-label small mb-1">Regex Kustom</label>
+                          <input className="form-control form-control-sm" placeholder="(otp|code)\\s*..." value={aliasCustomRegex} onChange={(e) => setAliasCustomRegex(e.target.value)} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
 
+            {/* === Daftar Alias === */}
             <div className="admin-panel admin-table-card">
-              <div className="admin-panel-header flex-wrap gap-2">
-                <h5 className="mb-0">Daftar Semua Alias</h5>
-                <div className="admin-toolbar-group">
-                  <input
-                    className="form-control form-control-sm admin-toolbar-field"
-                    placeholder="Cari alias, pengirim, atau subjek"
-                    value={aliasQuery}
-                    onChange={(e) => setAliasQuery(e.target.value)}
-                  />
-                  <select
-                    className="form-select form-select-sm admin-toolbar-field"
-                    value={aliasFilterStatus}
-                    onChange={(e) => setAliasFilterStatus(e.target.value)}
-                  >
-                    <option value="all">Status: Semua</option>
-                    <option value="aktif">Status: Aktif</option>
-                    <option value="arsip">Status: Diarsipkan</option>
-                    <option value="dengan-filter">Status: Dengan Filter</option>
-                    <option value="tanpa-filter">Status: Tanpa Filter</option>
-                  </select>
-                  <select className="form-select form-select-sm admin-toolbar-field" value={aliasSort} onChange={(e) => setAliasSort(e.target.value)}>
-                    <option value="activity">Urutkan: Aktivitas</option>
-                    <option value="newest">Urutkan: Terbaru</option>
-                    <option value="address">Urutkan: Alamat</option>
+              <div className="admin-panel-header">
+                <h5 className="mb-0"><i className="bi bi-list-ul me-2" />Daftar Alias</h5>
+              </div>
+
+              {/* Search + Sort - satu baris */}
+              <div className="px-3 py-2" style={{ borderBottom: '1px solid var(--bs-border-color)' }}>
+                <div className="d-flex gap-2 align-items-center">
+                  <div style={{ flex: 1, position: 'relative' }}>
+                    <i className="bi bi-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--bs-secondary-color)', fontSize: '0.8rem' }} />
+                    <input
+                      className="form-control form-control-sm"
+                      placeholder="Cari alias..."
+                      value={aliasQuery}
+                      onChange={(e) => setAliasQuery(e.target.value)}
+                      style={{ paddingLeft: '2rem' }}
+                    />
+                  </div>
+                  <select className="form-select form-select-sm" style={{ width: 'auto', minWidth: 120 }} value={aliasSort} onChange={(e) => setAliasSort(e.target.value)}>
+                    <option value="activity">Aktivitas</option>
+                    <option value="newest">Terbaru</option>
+                    <option value="address">Alamat</option>
                   </select>
                 </div>
               </div>
 
+              {/* Tabs */}
+              <div style={{ borderBottom: '1px solid var(--bs-border-color)', padding: '0 1rem' }}>
+                <div className="d-flex" style={{ gap: '0' }}>
+                  {[
+                    { key: 'all', label: 'Semua', icon: 'bi-collection', count: pagedAliases.length },
+                    { key: 'configured', label: 'Dikonfigurasi', icon: 'bi-gear-fill', count: pagedAliases.filter((r) => hasAliasConfig(r)).length },
+                    { key: 'plain', label: 'Tanpa Konfigurasi', icon: 'bi-envelope', count: pagedAliases.filter((r) => !hasAliasConfig(r)).length },
+                  ].map((tab) => (
+                    <button
+                      key={tab.key}
+                      onClick={() => setAliasListTab(tab.key)}
+                      style={{
+                        border: 'none', background: 'none',
+                        borderBottom: aliasListTab === tab.key ? '2.5px solid var(--bs-primary)' : '2.5px solid transparent',
+                        borderRadius: 0, fontSize: '0.82rem', fontWeight: 600,
+                        padding: '0.65rem 1rem',
+                        color: aliasListTab === tab.key ? 'var(--bs-primary)' : 'var(--bs-secondary-color)',
+                        cursor: 'pointer', transition: 'all 0.15s',
+                      }}
+                    >
+                      <i className={`bi ${tab.icon} me-1`} />{tab.label}
+                      <span className="ms-1" style={{ fontSize: '0.7rem', opacity: 0.7 }}>({tab.count})</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="admin-pagination-bar">
-                <small className="text-muted">{pagedAliases.length} / {aliasPagination.total} alias</small>
+                <small className="text-muted">{aliasPagination.total} alias total</small>
                 <div className="admin-page-controls">
-                  <button
-                    className="admin-page-btn"
-                    onClick={() => setAliasPage((p) => Math.max(1, p - 1))}
-                    disabled={aliasPagination.page <= 1}
-                  >
+                  <button className="admin-page-btn" onClick={() => setAliasPage((p) => Math.max(1, p - 1))} disabled={aliasPagination.page <= 1}>
                     <i className="bi bi-chevron-left" />
                   </button>
                   <span className="admin-page-info">{aliasPagination.page} / {aliasPageCount}</span>
-                  <button
-                    className="admin-page-btn"
-                    onClick={() => setAliasPage((p) => Math.min(aliasPageCount, p + 1))}
-                    disabled={aliasPagination.page >= aliasPageCount}
-                  >
+                  <button className="admin-page-btn" onClick={() => setAliasPage((p) => Math.min(aliasPageCount, p + 1))} disabled={aliasPagination.page >= aliasPageCount}>
                     <i className="bi bi-chevron-right" />
                   </button>
                 </div>
               </div>
 
-              <div className="table-responsive">
-                <table className="table table-hover align-middle mb-0 admin-table">
-                <thead>
-                  <tr>
-                    <th>Alias</th>
-                    <th className="d-none d-lg-table-cell">Dibuat</th>
-                    <th className="d-none d-lg-table-cell">Terakhir Dipakai</th>
-                    <th className="text-end d-none d-md-table-cell">Akses</th>
-                    <th className="text-end">Jumlah Email</th>
-                    <th>Filter</th>
-                    <th>Status</th>
-                    <th>Aksi</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedAliases.length === 0 && (
-                    <tr>
-                      <td colSpan={8}>
-                        <div className="admin-empty">
-                          <i className="bi bi-at" />
-                          <p>Belum ada alias ditemukan.</p>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                  {pagedAliases.map((row) => (
-                    <tr key={row.address}>
-                      <td>
-                        <div className="fw-600 text-break">{row.address}</div>
-                        <small className="text-muted text-break">{row.latestSubject || '-'}</small>
-                      </td>
-                      <td className="text-nowrap d-none d-lg-table-cell">{formatCompactDate(row.createdAt)}</td>
-                      <td className="text-nowrap d-none d-lg-table-cell">{formatCompactDate(row.lastUsedAt)}</td>
-                      <td className="text-end d-none d-md-table-cell">{row.hits}</td>
-                      <td className="text-end fw-600">{row.totalEmails}</td>
-                      <td>
-                        <span className={`badge ${hasActiveFilterConfig(row.filterConfig || {}) ? 'bg-primary-subtle text-primary' : 'bg-secondary-subtle text-secondary'}`}>
-                          {hasActiveFilterConfig(row.filterConfig || {})
-                            ? ((row.filterConfig?.subjectExact || []).length > 0 ? 'Subjek Ketat' : 'Aktif')
-                            : 'Tidak Ada'}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge ${row.active ? 'bg-success-subtle text-success' : 'bg-secondary-subtle text-secondary'}`}>
-                          {row.active ? 'Aktif' : 'Diarsipkan'}
-                        </span>
-                      </td>
-                      <td>
-                        <div className="admin-row-actions">
-                          <button className="btn btn-sm btn-icon btn-outline-secondary" title="Edit Filter" onClick={() => editAliasFilter(row)}>
-                            <i className="bi bi-pencil" />
-                          </button>
-                          <button
-                            className="btn btn-sm btn-icon btn-outline-success"
-                            title="Kotak Masuk"
-                            onClick={() => {
-                              setInboxAlias(row.address);
-                              setSection('inbox');
-                            }}
-                          >
-                            <i className="bi bi-inbox" />
-                          </button>
-                          <button
-                            className="btn btn-sm btn-icon btn-outline-primary"
-                            title="Log Email"
-                            onClick={() => {
-                              setSelectedAlias(row.address);
-                              setSection('logs');
-                            }}
-                          >
-                            <i className="bi bi-list-ul" />
-                          </button>
-                          <button className="btn btn-sm btn-icon btn-outline-danger" title="Arsipkan alias" onClick={() => removeAlias(row.address)} disabled={loading}>
-                            <i className="bi bi-archive" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-                </table>
-              </div>
+              {/* Table */}
+              {(() => {
+                let rows = pagedAliases;
+                if (aliasListTab === 'configured') rows = pagedAliases.filter((r) => hasAliasConfig(r));
+                else if (aliasListTab === 'plain') rows = pagedAliases.filter((r) => !hasAliasConfig(r));
+
+                if (rows.length === 0) return (
+                  <div className="admin-empty p-4">
+                    <i className="bi bi-at" />
+                    <p>Tidak ada alias di tab ini.</p>
+                  </div>
+                );
+
+                return (
+                  <div className="table-responsive">
+                    <table className="table table-hover align-middle mb-0 admin-table">
+                      <thead><tr>
+                        <th>Alias</th>
+                        <th className="d-none d-lg-table-cell">Dibuat</th>
+                        <th className="text-end">Email</th>
+                        <th>Konfigurasi</th>
+                        <th>Status</th>
+                        <th>Aksi</th>
+                      </tr></thead>
+                      <tbody>
+                        {rows.map((row) => (
+                          <tr key={row.address}>
+                            <td><div className="fw-600 text-break">{row.address}</div></td>
+                            <td className="text-nowrap d-none d-lg-table-cell">{formatCompactDate(row.createdAt)}</td>
+                            <td className="text-end fw-600">{row.totalEmails}</td>
+                            <td>
+                              <div className="d-flex gap-1 flex-wrap">
+                                {hasActiveFilterConfig(row.filterConfig || {}) && (
+                                  <span className="badge bg-primary-subtle text-primary">Filter</span>
+                                )}
+                                {row.pinHash && (
+                                  <span className="badge bg-warning-subtle text-warning">PIN</span>
+                                )}
+                                {!hasActiveFilterConfig(row.filterConfig || {}) && !row.pinHash && (
+                                  <span className="badge bg-secondary-subtle text-secondary">-</span>
+                                )}
+                              </div>
+                            </td>
+                            <td><span className={`badge ${row.active ? 'bg-success-subtle text-success' : 'bg-secondary-subtle text-secondary'}`}>{row.active ? 'Aktif' : 'Arsip'}</span></td>
+                            <td>
+                              <div className="admin-row-actions">
+                                <button className="btn btn-sm btn-icon btn-outline-secondary" title="Edit" onClick={() => editAliasFilter(row)}><i className="bi bi-pencil" /></button>
+                                <button className="btn btn-sm btn-icon btn-outline-success" title="Inbox" onClick={() => { setInboxAlias(row.address); setSection('inbox'); }}><i className="bi bi-inbox" /></button>
+                                <button className="btn btn-sm btn-icon btn-outline-danger" title="Arsipkan" onClick={() => removeAlias(row.address)} disabled={loading}><i className="bi bi-archive" /></button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
 
-        {section === 'inbox' && (
+                {section === 'inbox' && (
           <div className="admin-panel">
-            <div className="admin-panel-header flex-wrap gap-2">
-              <h5 className="mb-0">Kotak Masuk Admin (Semua Email)</h5>
-              <div className="admin-toolbar-group">
-                <select className="form-select form-select-sm admin-toolbar-field" value={inboxAlias} onChange={(e) => setInboxAlias(e.target.value)}>
-                  <option value="">Pilih alias</option>
-                  {aliasRows.filter((row) => row.active).map((row) => (
-                    <option key={row.address} value={row.address}>{row.address}</option>
-                  ))}
-                </select>
-                <button className="btn btn-sm btn-primary" onClick={() => loadAdminInbox()} disabled={inboxLoading || !inboxAlias}>
-                  {inboxLoading ? 'Memuat...' : 'Muat Inbox'}
-                </button>
-                <input
-                  className="form-control form-control-sm admin-toolbar-field"
-                  placeholder="Cari subjek, pengirim, ringkasan"
-                  value={inboxQuery}
-                  onChange={(e) => setInboxQuery(e.target.value)}
-                />
-                <select className="form-select form-select-sm admin-toolbar-field" value={inboxSort} onChange={(e) => setInboxSort(e.target.value)}>
-                  <option value="baru">Urutkan: Terbaru</option>
-                  <option value="lama">Urutkan: Terlama</option>
-                </select>
-              </div>
+            <div className="admin-panel-header">
+              <h5 className="mb-0"><i className="bi bi-inbox-fill me-2" />Kotak Masuk Admin</h5>
             </div>
 
-            <div className="alert alert-secondary py-2 small mb-3">
-              Admin dapat meninjau semua email untuk alias ini. Aturan filter hanya berlaku di halaman pengguna.
-            </div>
-
-            <div className="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
-              <small className="text-muted">
-                {inboxAlias ? <><i className="bi bi-at me-1" />{inboxAlias}</> : 'Belum ada alias dipilih'}
-              </small>
-              <span className="badge bg-primary-subtle text-primary">
-                <i className="bi bi-envelope me-1" />{inboxPagination.total} email
-              </span>
-            </div>
-
-            <div className="admin-pagination-bar">
-              <small className="text-muted">{inboxPagination.rows.length} / {inboxPagination.total} email</small>
-              <div className="admin-page-controls">
-                <button
-                  className="admin-page-btn"
-                  onClick={() => setInboxPage((p) => Math.max(1, p - 1))}
-                  disabled={inboxPagination.page <= 1}
-                >
-                  <i className="bi bi-chevron-left" />
-                </button>
-                <span className="admin-page-info">{inboxPagination.page} / {inboxPagination.totalPages}</span>
-                <button
-                  className="admin-page-btn"
-                  onClick={() => setInboxPage((p) => Math.min(inboxPagination.totalPages, p + 1))}
-                  disabled={inboxPagination.page >= inboxPagination.totalPages}
-                >
-                  <i className="bi bi-chevron-right" />
+            {/* Alias picker - searchable */}
+            <div className="px-3 pt-3 pb-2">
+              <label className="form-label small fw-bold mb-2" style={{ textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--bs-secondary-color)', fontSize: '0.75rem' }}>
+                Pilih Alias
+              </label>
+              <div className="d-flex gap-2 align-items-center mb-2">
+                <div style={{ flex: 1, position: 'relative' }}>
+                  <i className="bi bi-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--bs-secondary-color)', fontSize: '0.8rem' }} />
+                  <input
+                    className="form-control form-control-sm"
+                    placeholder="Ketik untuk cari alias..."
+                    value={inboxAlias}
+                    onChange={(e) => setInboxAlias(e.target.value)}
+                    style={{ paddingLeft: '2rem' }}
+                    list="inbox-alias-list"
+                  />
+                  <datalist id="inbox-alias-list">
+                    {aliasRows.map((row) => (
+                      <option key={row.address} value={row.address} />
+                    ))}
+                  </datalist>
+                </div>
+                <button className="btn btn-sm btn-primary" style={{ borderRadius: '8px', padding: '0.45rem 1rem', fontWeight: 600 }} onClick={() => loadAdminInbox()} disabled={inboxLoading || !inboxAlias}>
+                  {inboxLoading ? (<><span className="spinner-border spinner-border-sm me-1" />Memuat</>) : (<><i className="bi bi-arrow-right me-1" />Muat</>)}
                 </button>
               </div>
+              {inboxAlias && inboxAlias.includes('@') && (
+                <div className="rounded-2 px-3 py-2 small" style={{ background: 'rgba(var(--bs-primary-rgb), 0.06)', border: '1px solid rgba(var(--bs-primary-rgb), 0.15)', fontFamily: 'monospace' }}>
+                  <i className="bi bi-envelope-fill text-primary me-2" />{inboxAlias}
+                </div>
+              )}
             </div>
 
-            <div className="table-responsive">
-              <table className="table table-hover align-middle mb-0 admin-inbox-table admin-table">
-                <thead>
-                  <tr>
-                    <th>Subjek</th>
-                    <th>Pengirim</th>
-                    <th>Tanggal</th>
-                    <th>Ringkasan</th>
-                    <th className="text-end">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {inboxRows.length === 0 && (
-                    <tr>
-                      <td colSpan={5}>
-                        <div className="admin-empty">
-                          <i className="bi bi-inbox" />
-                          <p>Belum ada email untuk alias ini.</p>
-                        </div>
-                      </td>
-                    </tr>
+            {/* Toolbar - search + sort */}
+            {inboxMessages.length > 0 && (
+              <div className="px-3 py-2" style={{ borderTop: '1px solid var(--bs-border-color)', borderBottom: '1px solid var(--bs-border-color)' }}>
+                <div className="d-flex gap-2 align-items-center">
+                  <div style={{ flex: 1, position: 'relative' }}>
+                    <i className="bi bi-funnel" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--bs-secondary-color)', fontSize: '0.8rem' }} />
+                    <input
+                      className="form-control form-control-sm"
+                      placeholder="Filter subjek, pengirim..."
+                      value={inboxQuery}
+                      onChange={(e) => setInboxQuery(e.target.value)}
+                      style={{ paddingLeft: '2rem' }}
+                    />
+                  </div>
+                  <select className="form-select form-select-sm" style={{ width: 'auto', minWidth: 110 }} value={inboxSort} onChange={(e) => setInboxSort(e.target.value)}>
+                    <option value="baru">Terbaru</option>
+                    <option value="lama">Terlama</option>
+                  </select>
+                  <span className="badge bg-primary-subtle text-primary" style={{ whiteSpace: 'nowrap' }}>
+                    {inboxPagination.total} email
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Pagination */}
+            {inboxMessages.length > 0 && (
+              <div className="admin-pagination-bar">
+                <small className="text-muted">{inboxPagination.total} email</small>
+                <div className="admin-page-controls">
+                  <button className="admin-page-btn" onClick={() => setInboxPage((p) => Math.max(1, p - 1))} disabled={inboxPagination.page <= 1}>
+                    <i className="bi bi-chevron-left" />
+                  </button>
+                  <span className="admin-page-info">{inboxPagination.page} / {inboxPagination.totalPages}</span>
+                  <button className="admin-page-btn" onClick={() => setInboxPage((p) => Math.min(inboxPagination.totalPages, p + 1))} disabled={inboxPagination.page >= inboxPagination.totalPages}>
+                    <i className="bi bi-chevron-right" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Email list - card style */}
+            <div>
+              {!inboxAlias && inboxMessages.length === 0 && (
+                <div className="p-4 text-center">
+                  <div style={{ width: 52, height: 52, borderRadius: '14px', margin: '0 auto 0.75rem', background: 'var(--bs-tertiary-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <i className="bi bi-inbox" style={{ fontSize: '1.4rem', color: 'var(--bs-secondary-color)' }} />
+                  </div>
+                  <p style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Pilih alias untuk melihat email</p>
+                  <p className="text-muted small mb-0">Ketik nama alias di kolom pencarian di atas, lalu klik Muat.</p>
+                </div>
+              )}
+              {inboxAlias && inboxMessages.length === 0 && !inboxLoading && (
+                <div className="admin-empty p-4">
+                  <i className="bi bi-envelope-open" />
+                  <p>Belum ada email untuk alias ini.</p>
+                </div>
+              )}
+              {inboxPagination.rows.map((msg) => (
+                <div
+                  key={msg.id}
+                  onClick={() => openAdminMessage(msg.id)}
+                  style={{
+                    padding: '0.85rem 1.25rem',
+                    borderBottom: '1px solid var(--bs-border-color)',
+                    cursor: 'pointer',
+                    transition: 'background 0.12s',
+                  }}
+                  className="admin-log-item"
+                  title="Klik untuk buka isi email"
+                >
+                  <div className="d-flex align-items-start justify-content-between gap-2 mb-1">
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {msg.subject || '(tanpa subjek)'}
+                      </div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--bs-secondary-color)', marginTop: '0.15rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {msg.from || '-'}
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--bs-secondary-color)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                      {formatDateTime(msg.date)}
+                    </div>
+                  </div>
+                  {msg.snippet && (
+                    <p style={{
+                      margin: 0, fontSize: '0.8rem', color: 'var(--bs-secondary-color)',
+                      overflow: 'hidden', display: '-webkit-box',
+                      WebkitLineClamp: 1, WebkitBoxOrient: 'vertical',
+                    }}>
+                      {msg.snippet}
+                    </p>
                   )}
-                  {inboxPagination.rows.map((msg) => (
-                    <tr key={msg.id} className="admin-inbox-row" onClick={() => openAdminMessage(msg.id)}>
-                      <td className="text-break">{msg.subject || '(tanpa subjek)'}</td>
-                      <td className="text-break">{msg.from || '-'}</td>
-                      <td className="text-nowrap">{formatDateTime(msg.date)}</td>
-                      <td className="text-break">{msg.snippet || '-'}</td>
-                      <td className="text-end" onClick={(e) => e.stopPropagation()}>
-                        <button className="btn btn-sm btn-outline-primary" onClick={() => openAdminMessage(msg.id)}>
-                          Buka
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                </div>
+              ))}
             </div>
           </div>
         )}
 
         {section === 'logs' && (
           <div className="admin-panel">
-            <div className="admin-panel-header flex-wrap gap-2">
-              <h5 className="mb-0">Log Email Masuk per Alias</h5>
-              <div className="admin-toolbar-group">
-                <select className="form-select form-select-sm admin-toolbar-field" value={selectedAlias} onChange={(e) => setSelectedAlias(e.target.value)}>
+            <div className="admin-panel-header">
+              <h5 className="mb-0"><i className="bi bi-clock-history me-2" />Log Email</h5>
+            </div>
+
+            {/* Toolbar - satu baris */}
+            <div className="px-3 py-2" style={{ borderBottom: '1px solid var(--bs-border-color)' }}>
+              <div className="d-flex gap-2 align-items-center flex-wrap">
+                <select className="form-select form-select-sm" style={{ width: 'auto', minWidth: 140 }} value={selectedAlias} onChange={(e) => setSelectedAlias(e.target.value)}>
                   <option value="">Semua alias</option>
                   {aliasRows.map((row) => (
                     <option key={row.address} value={row.address}>{row.address}</option>
                   ))}
                 </select>
-                <input
-                  className="form-control form-control-sm admin-toolbar-field"
-                  placeholder="Cari subjek, pengirim, ringkasan"
-                  value={logQuery}
-                  onChange={(e) => setLogQuery(e.target.value)}
-                />
-                <select className="form-select form-select-sm admin-toolbar-field" value={logSort} onChange={(e) => setLogSort(e.target.value)}>
-                  <option value="latest">Urutkan: Terbaru</option>
-                  <option value="lama">Urutkan: Terlama</option>
+                <div style={{ flex: 1, position: 'relative', minWidth: 150 }}>
+                  <i className="bi bi-search" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--bs-secondary-color)', fontSize: '0.8rem' }} />
+                  <input
+                    className="form-control form-control-sm"
+                    placeholder="Cari subjek, pengirim..."
+                    value={logQuery}
+                    onChange={(e) => setLogQuery(e.target.value)}
+                    style={{ paddingLeft: '2rem' }}
+                  />
+                </div>
+                <select className="form-select form-select-sm" style={{ width: 'auto', minWidth: 110 }} value={logSort} onChange={(e) => setLogSort(e.target.value)}>
+                  <option value="latest">Terbaru</option>
+                  <option value="lama">Terlama</option>
                 </select>
-                <button className="btn btn-sm btn-outline-danger" onClick={clearAllLogs} disabled={loading || logs.length === 0}>
-                  Bersihkan Log
+                <button className="btn btn-sm btn-outline-danger" onClick={clearAllLogs} disabled={loading || logs.length === 0} title="Bersihkan semua log">
+                  <i className="bi bi-trash3 me-1" />Hapus
                 </button>
               </div>
             </div>
 
+            {/* Pagination */}
             <div className="admin-pagination-bar">
-              <small className="text-muted">{logPagination.rows.length} / {logPagination.total} log</small>
+              <small className="text-muted">{logPagination.total} email tercatat</small>
               <div className="admin-page-controls">
-                <button
-                  className="admin-page-btn"
-                  onClick={() => setLogPage((p) => Math.max(1, p - 1))}
-                  disabled={logPagination.page <= 1}
-                >
+                <button className="admin-page-btn" onClick={() => setLogPage((p) => Math.max(1, p - 1))} disabled={logPagination.page <= 1}>
                   <i className="bi bi-chevron-left" />
                 </button>
                 <span className="admin-page-info">{logPagination.page} / {logPagination.totalPages}</span>
-                <button
-                  className="admin-page-btn"
-                  onClick={() => setLogPage((p) => Math.min(logPagination.totalPages, p + 1))}
-                  disabled={logPagination.page >= logPagination.totalPages}
-                >
+                <button className="admin-page-btn" onClick={() => setLogPage((p) => Math.min(logPagination.totalPages, p + 1))} disabled={logPagination.page >= logPagination.totalPages}>
                   <i className="bi bi-chevron-right" />
                 </button>
               </div>
             </div>
 
-            <div className="table-responsive">
-              <table className="table table-hover align-middle mb-0 admin-table">
-                <thead>
-                  <tr>
-                    <th>Alias</th>
-                    <th>Subjek</th>
-                    <th>Pengirim</th>
-                    <th className="d-none d-xl-table-cell">Tanggal Email</th>
-                    <th>Terakhir Terlihat</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logRows.length === 0 && (
-                    <tr>
-                      <td colSpan={5}>
-                        <div className="admin-empty">
-                          <i className="bi bi-envelope-open" />
-                          <p>Tidak ada log yang sesuai filter.</p>
-                        </div>
-                      </td>
-                    </tr>
+            {/* Log list - card style */}
+            <div>
+              {logPagination.rows.length === 0 && (
+                <div className="admin-empty p-4">
+                  <i className="bi bi-envelope-open" />
+                  <p>Tidak ada log yang sesuai filter.</p>
+                </div>
+              )}
+              {logPagination.rows.map((entry) => (
+                <div
+                  key={entry.id}
+                  onClick={() => openAdminMessage(entry.id)}
+                  style={{
+                    padding: '0.85rem 1.25rem',
+                    borderBottom: '1px solid var(--bs-border-color)',
+                    cursor: 'pointer',
+                    transition: 'background 0.12s',
+                  }}
+                  className="admin-log-item"
+                  title="Klik untuk buka isi email"
+                >
+                  <div className="d-flex align-items-start justify-content-between gap-2 mb-1">
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {entry.subject || '(tanpa subjek)'}
+                      </div>
+                      <div className="d-flex align-items-center gap-2 mt-1" style={{ fontSize: '0.78rem' }}>
+                        <span className="text-muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
+                          {entry.from || '-'}
+                        </span>
+                        <span className="badge bg-primary-subtle text-primary" style={{ fontSize: '0.68rem', fontWeight: 600 }}>
+                          {entry.alias || '?'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="text-end" style={{ flexShrink: 0 }}>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--bs-secondary-color)', whiteSpace: 'nowrap' }}>
+                        {formatDateTime(entry.date)}
+                      </div>
+                    </div>
+                  </div>
+                  {entry.snippet && (
+                    <p style={{
+                      margin: 0, fontSize: '0.8rem', color: 'var(--bs-secondary-color)',
+                      overflow: 'hidden', display: '-webkit-box',
+                      WebkitLineClamp: 1, WebkitBoxOrient: 'vertical',
+                    }}>
+                      {entry.snippet}
+                    </p>
                   )}
-                  {logPagination.rows.map((entry) => (
-                    <tr key={entry.id}>
-                      <td className="text-break fw-600">{entry.alias || 'tidak-dikenal'}</td>
-                      <td>
-                        <div className="text-break">{entry.subject || '(tanpa subjek)'}</div>
-                        <small className="text-muted text-break">{entry.snippet || '-'}</small>
-                      </td>
-                      <td className="text-break">{entry.from || '-'}</td>
-                      <td className="text-nowrap d-none d-xl-table-cell">{formatDateTime(entry.date)}</td>
-                      <td className="text-nowrap">{formatDateTime(entry.lastSeenAt)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                </div>
+              ))}
             </div>
+
+            <style>{`
+              .admin-log-item:hover { background: var(--bs-tertiary-bg) !important; }
+            `}</style>
           </div>
         )}
 

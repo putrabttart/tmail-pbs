@@ -1,10 +1,10 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 
 const DEFAULT_DOMAIN = '';
-const AUTO_REFRESH_MS = 10000;
+const AUTO_REFRESH_MS = 4000;
 
 // â”€â”€â”€ Themes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const THEMES = {
@@ -79,7 +79,7 @@ function formatMessageDate(value) {
   });
 }
 
-export default function HomePage() {
+export default function HomePage({ initialAlias = '' }) {
   useBootstrap();
   const [address, setAddress] = useState('');
   const [localPart, setLocalPart] = useState(() => randomAlias());
@@ -93,9 +93,88 @@ export default function HomePage() {
   const [toast, setToast] = useState('');
   const [messageFilter, setMessageFilter] = useState(null);
   const [theme, setTheme] = useState('blue');
+  const [otpNotification, setOtpNotification] = useState(null);
+  const [notifPermission, setNotifPermission] = useState('default');
+  const [pinRequired, setPinRequired] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [pinVerified, setPinVerified] = useState(false);
+
+  const prevMessageIdsRef = useRef(new Set());
+  const audioRef = useRef(null);
+  const skipNextNotifRef = useRef(false);
+  const currentAddressRef = useRef('');
+  const verifiedPinRef = useRef('');
 
   const t = THEMES[theme] || THEMES.blue;
   const displayedMessages = useMemo(() => (messages || []).slice(0, 3), [messages]);
+
+  // â"€â"€â"€ Notification Sound â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+  useEffect(() => {
+    // Create audio element for notification sound (Web Audio API beep)
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (AudioContext) {
+        audioRef.current = { type: 'webaudio' };
+      }
+    } catch {}
+  }, []);
+
+  function playNotificationSound() {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+      // Play a pleasant two-tone notification
+      const playTone = (freq, startTime, duration) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.3, startTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+        osc.start(startTime);
+        osc.stop(startTime + duration);
+      };
+      const now = ctx.currentTime;
+      playTone(880, now, 0.15);        // A5
+      playTone(1108, now + 0.15, 0.2); // C#6
+      playTone(1320, now + 0.3, 0.25); // E6
+      // Close context after sound finishes
+      setTimeout(() => ctx.close(), 1000);
+    } catch {}
+  }
+
+  // Request notification permission on first interaction
+  function requestNotifPermission() {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().then((perm) => setNotifPermission(perm));
+    }
+  }
+
+  useEffect(() => {
+    if (typeof Notification !== 'undefined') {
+      setNotifPermission(Notification.permission);
+    }
+  }, []);
+
+  function showBrowserNotification(title, body, otpCode) {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    try {
+      const notif = new Notification(title, {
+        body,
+        icon: '/favicon.ico',
+        tag: 'otp-notification',
+        requireInteraction: true,
+      });
+      notif.onclick = () => {
+        window.focus();
+        if (otpCode) copyToClipboard(otpCode, { successToast: '✓ OTP disalin dari notifikasi' });
+        notif.close();
+      };
+    } catch {}
+  }
 
   // Apply theme CSS variables to DOM
   useEffect(() => {
@@ -119,7 +198,7 @@ export default function HomePage() {
       .catch(() => {});
   }, []);
 
-  const otpKeywordRe = /(otp|passcode|pass code|verification|verify|one[\s-]*time|2fa|mfa|auth|authentication|security code|login code|reset code|activation code|kode|kode verifikasi|kode otp|pin|token)/i;
+  const otpKeywordRe = /(otp|passcode|pass code|verification|verify|one[\s-]*time|2fa|mfa|auth|authentication|security code|login code|reset code|activation code|kode|kode verifikasi|kode otp|pin|token|code|sandi|kata sandi|password|confirm|konfirmasi)/i;
 
   function normalizeOtpCandidate(raw) {
     const text = String(raw || '').trim();
@@ -145,28 +224,38 @@ export default function HomePage() {
 
     if (!hasDigit) return -999;
 
-    if (len === 6) score += 7;
+    // Length scoring — 6 digits is the most common OTP length
+    if (len === 6) score += 9;
+    else if (len === 4) score += 6;
     else if (len === 5 || len === 7) score += 5;
-    else if (len === 4 || len === 8) score += 3;
+    else if (len === 8) score += 4;
     else score += 1;
 
-    if (isNumeric) score += 2;
-    if (hasLetter && hasDigit) score += 3;
+    // Pure numeric codes are more likely OTPs
+    if (isNumeric) score += 4;
+    // Alphanumeric with digits (like AB12CD) can be verification codes
+    if (hasLetter && hasDigit && len <= 8) score += 3;
 
+    // Grouped patterns (123-456, 12 34 56)
     if (/^[A-Za-z0-9]{2,8}(?:-[A-Za-z0-9]{2,8}){1,2}$/.test(raw)) score += 6;
-    if (/^\d{2,4}(?:[\s-]\d{2,4}){1,3}$/.test(raw)) score += 5;
+    if (/^\d{2,4}(?:[\s-]\d{2,4}){1,3}$/.test(raw)) score += 7;
 
+    // Penalties
     if (hasLetter && hasDigit && digitCount === 1 && len >= 8) score -= 8;
     if (hasLetter && !/[A-Z]/.test(raw)) score -= 2;
+    if (/^(?:19|20)\d{2}$/.test(code)) score -= 8; // Year
+    if (/^(\d)\1{4,}$/.test(code)) score -= 6; // Repeated digits
+    if (/^\d{9,}$/.test(code)) score -= 7; // Too long number (phone, etc)
+    if (/^0\d{9,}$/.test(code)) score -= 10; // Phone number
 
-    if (/^(?:19|20)\d{2}$/.test(code)) score -= 6;
-    if (/^(\d)\1{4,}$/.test(code)) score -= 4;
-    if (/^\d{9,}$/.test(code)) score -= 5;
-
-    const near = input.slice(Math.max(0, idx - 80), Math.min(input.length, idx + raw.length + 80));
-    if (otpKeywordRe.test(near)) score += 10;
-    if (/(do not share|jangan bagikan|expires?|expired|berlaku|valid|minutes?|menit)/i.test(near)) score += 2;
-    if (/(invoice|order|amount|harga|total|rp\b|idr\b|usd\b)/i.test(near) && !otpKeywordRe.test(near)) score -= 3;
+    // Context scoring — look at surrounding text
+    const near = input.slice(Math.max(0, idx - 120), Math.min(input.length, idx + raw.length + 120));
+    if (otpKeywordRe.test(near)) score += 12;
+    if (/(do not share|jangan bagikan|don't share|rahasia|secret|private)/i.test(near)) score += 5;
+    if (/(expires?|expired|berlaku|valid|minutes?|menit|seconds?|detik)/i.test(near)) score += 4;
+    if (/(enter|masukkan|gunakan|use|input|ketik|type)/i.test(near)) score += 3;
+    if (/(invoice|order|amount|harga|total|rp\b|idr\b|usd\b|\$)/i.test(near) && !otpKeywordRe.test(near)) score -= 5;
+    if (/(tracking|resi|nomor pesanan|order number|id transaksi)/i.test(near) && !otpKeywordRe.test(near)) score -= 4;
 
     return score;
   }
@@ -197,13 +286,23 @@ export default function HomePage() {
       candidates.push({ code, output, score, idx });
     }
 
-    const contextualRe = /\b(?:otp|passcode|verification(?:\s*code)?|security\s*code|one[\s-]*time(?:\s*(?:password|pin|code))?|kode(?:\s*(?:otp|verifikasi|login))?|pin|token|2fa|mfa|auth(?:entication)?\s*code|confirmation\s*code)\b[^\r\nA-Za-z0-9]{0,20}([A-Za-z0-9]{2,8}(?:[\s-][A-Za-z0-9]{2,8}){0,2})/gi;
-    const numericRe = /\b\d{4,8}\b/g;
-    const groupedNumericRe = /\b\d{2,4}(?:[\s-]\d{2,4}){1,3}\b/g;
-    const groupedAlphaNumRe = /\b[A-Za-z0-9]{2,8}(?:-[A-Za-z0-9]{2,8}){1,2}\b/g;
+    // Pattern 1: Contextual — keyword followed by code
+    const contextualRe = /\b(?:otp|passcode|verification(?:\s*code)?|security\s*code|one[\s-]*time(?:\s*(?:password|pin|code))?|kode(?:\s*(?:otp|verifikasi|login|akses))?|pin|token|2fa|mfa|auth(?:entication)?\s*code|confirmation\s*code|code|sandi)\b[^\r\nA-Za-z0-9]{0,30}([A-Za-z0-9]{2,8}(?:[\s-][A-Za-z0-9]{2,8}){0,2})/gi;
+    // Pattern 2: "Your code is: XXXXXX" style
+    const codeIsRe = /(?:code|kode|otp|pin|sandi)\s*(?:is|:|=|nya|anda)\s*[^\r\nA-Za-z0-9]{0,10}([A-Za-z0-9]{4,8}(?:[\s-][A-Za-z0-9]{2,4}){0,2})/gi;
+    // Pattern 3: Standalone numeric codes (4-8 digits)
+    const numericRe = /\b(\d{4,8})\b/g;
+    // Pattern 4: Grouped numeric (123 456, 12-34-56)
+    const groupedNumericRe = /\b(\d{2,4}(?:[\s-]\d{2,4}){1,3})\b/g;
+    // Pattern 5: Grouped alphanumeric (AB1-CD2)
+    const groupedAlphaNumRe = /\b([A-Za-z0-9]{2,8}(?:-[A-Za-z0-9]{2,8}){1,2})\b/g;
+    // Pattern 6: Bold/emphasized codes (often in HTML: <b>123456</b>, <strong>...)
+    const boldCodeRe = /(?:<b>|<strong>|<em>|\*\*|__)([A-Za-z0-9]{4,8}(?:[\s-][A-Za-z0-9]{2,4}){0,2})(?:<\/b>|<\/strong>|<\/em>|\*\*|__)/gi;
 
     let m;
-    while ((m = contextualRe.exec(input)) !== null) pushCandidate(m[1], m.index, 9);
+    while ((m = contextualRe.exec(input)) !== null) pushCandidate(m[1], m.index, 10);
+    while ((m = codeIsRe.exec(input)) !== null) pushCandidate(m[1], m.index, 11);
+    while ((m = boldCodeRe.exec(input)) !== null) pushCandidate(m[1], m.index, 8);
     while ((m = groupedNumericRe.exec(input)) !== null) pushCandidate(m[0], m.index, 6);
     while ((m = groupedAlphaNumRe.exec(input)) !== null) pushCandidate(m[0], m.index, 7);
     while ((m = numericRe.exec(input)) !== null) pushCandidate(m[0], m.index, 4);
@@ -211,6 +310,18 @@ export default function HomePage() {
     if (!candidates.length) return null;
     candidates.sort((a, b) => b.score - a.score || a.idx - b.idx);
     return candidates[0].output;
+  }
+
+  // Extract OTP from a message object (used for badge display)
+  function extractOtpFromMessage(msg) {
+    if (!msg) return null;
+    const base = [
+      msg.subject || '',
+      msg.snippet || '',
+      msg.from || '',
+      msg.to || ''
+    ].join('\n');
+    return pickOtpFromText(base);
   }
 
   function htmlToText(html) {
@@ -312,16 +423,80 @@ export default function HomePage() {
   }
 
   async function refreshInbox(currentAddr = address, options = {}) {
-    const { silent = false } = options;
+    const { silent = false, currentPin = '' } = options;
     if (!silent) {
       setLoading(true);
       setError('');
     }
     try {
-      const res = await fetch(`/api/messages?alias=${encodeURIComponent(currentAddr)}`);
+      // Use: explicitly passed PIN > verified PIN ref > pinInput state
+      const pinParam = currentPin || verifiedPinRef.current || pinInput;
+      let url = `/api/messages?alias=${encodeURIComponent(currentAddr)}`;
+      if (pinParam) url += `&pin=${encodeURIComponent(pinParam)}`;
+      const res = await fetch(url);
       const data = await res.json().catch(() => ({}));
+
+      // Handle PIN required or wrong PIN
+      if (res.status === 401 && (data?.error || '').toLowerCase().includes('pin')) {
+        setPinRequired(true);
+        setPinVerified(false);
+        verifiedPinRef.current = '';
+        if (currentPin) {
+          // PIN was explicitly provided but wrong
+          setError('PIN salah');
+          setPinInput('');
+        }
+        if (!silent) setLoading(false);
+        return;
+      }
+
       if (!res.ok) throw new Error(data?.error || 'Failed to fetch messages');
-      setMessages(data.messages || []);
+
+      // PIN was accepted — store in ref for future polling
+      if (pinParam && pinRequired) {
+        verifiedPinRef.current = pinParam;
+        setPinVerified(true);
+        setError('');
+      }
+
+      // STALE CHECK: if address changed while we were fetching, discard results
+      if (currentAddr !== currentAddressRef.current) return;
+
+      const newMessages = data.messages || [];
+
+      // On first fetch after alias change (non-silent), just populate prevIds without notifying
+      if (!silent) {
+        prevMessageIdsRef.current = new Set(newMessages.map((m) => m.id));
+        skipNextNotifRef.current = false;
+      } else if (skipNextNotifRef.current) {
+        // Skip notification on the very first silent poll after alias change
+        prevMessageIdsRef.current = new Set(newMessages.map((m) => m.id));
+        skipNextNotifRef.current = false;
+      } else if (newMessages.length > 0) {
+        // Detect genuinely new messages and check for OTP
+        const prevIds = prevMessageIdsRef.current;
+        const newOnes = newMessages.filter((m) => !prevIds.has(m.id));
+        if (newOnes.length > 0) {
+          for (const msg of newOnes) {
+            const otp = extractOtpFromMessage(msg);
+            if (otp) {
+              playNotificationSound();
+              setOtpNotification({ code: otp, from: msg.from, subject: msg.subject, id: msg.id });
+              showBrowserNotification(
+                `\u{1F511} Kode OTP: ${otp}`,
+                `Dari: ${msg.from || 'Unknown'}\n${msg.subject || ''}`,
+                otp
+              );
+              break;
+            } else {
+              playNotificationSound();
+            }
+          }
+        }
+        prevMessageIdsRef.current = new Set(newMessages.map((m) => m.id));
+      }
+
+      setMessages(newMessages);
       setMessageFilter(data.filter || null);
       setLastRefreshed(new Date().toLocaleTimeString());
     } catch (err) {
@@ -347,10 +522,59 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!address || !address.includes('@')) return undefined;
+
+    // Set current address ref FIRST — this is used by refreshInbox to discard stale responses
+    currentAddressRef.current = address;
+
+    // Clear old messages immediately when alias changes
+    setMessages([]);
+    setDetail(null);
+    setError('');
+    setLastRefreshed('');
+    setMessageFilter(null);
+    setOtpNotification(null);
+    setPinRequired(false);
+    setPinInput('');
+    setPinVerified(false);
+    verifiedPinRef.current = '';
+    prevMessageIdsRef.current = new Set();
+    skipNextNotifRef.current = true;
+
     registerAlias(address);
     refreshInbox(address);
+
+    // SSE real-time: listen for push notifications from server
+    let es = null;
+    let reconnectTimer = null;
+
+    function connectSSE() {
+      try {
+        es = new EventSource(`/api/messages/stream?alias=${encodeURIComponent(address)}`);
+        es.addEventListener('newmail', () => {
+          // Immediately refresh when server signals new mail
+          refreshInbox(address, { silent: true });
+        });
+        es.onerror = () => {
+          // SSE disconnected, will fallback to polling
+          try { es.close(); } catch {}
+          es = null;
+          // Try reconnect after 5 seconds
+          reconnectTimer = setTimeout(connectSSE, 5000);
+        };
+      } catch {
+        // SSE not supported, polling only
+      }
+    }
+
+    connectSSE();
+
+    // Fallback polling (slower interval since SSE handles real-time)
     const timer = setInterval(() => refreshInbox(address, { silent: true }), AUTO_REFRESH_MS);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (es) { try { es.close(); } catch {} }
+    };
   }, [address]);
 
   useEffect(() => {
@@ -377,11 +601,29 @@ export default function HomePage() {
     setAddress(newAddr);
   }, [localPart, selectedDomain]);
 
+  // Handle initialAlias from URL (e.g. /user@domain.com)
+  useEffect(() => {
+    if (!initialAlias || !initialAlias.includes('@')) return;
+    const [local, domain] = initialAlias.split('@');
+    if (local && domain) {
+      setLocalPart(local);
+      setSelectedDomain(domain);
+      setAddress(initialAlias);
+    }
+  }, [initialAlias]);
+
   useEffect(() => {
     if (!toast) return undefined;
-    const timer = setTimeout(() => setToast(''), 1800);
+    const timer = setTimeout(() => setToast(''), 10000);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  // Auto-dismiss OTP notification after 30 seconds
+  useEffect(() => {
+    if (!otpNotification) return undefined;
+    const timer = setTimeout(() => setOtpNotification(null), 30000);
+    return () => clearTimeout(timer);
+  }, [otpNotification]);
 
   // â”€â”€â”€ Computed style helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const btnPrimary = {
@@ -535,9 +777,24 @@ export default function HomePage() {
                 </button>
                 <button
                   style={btnOutline}
-                  onClick={() => { setLocalPart(randomAlias(10)); setToast('âœ“ Alamat baru dibuat'); }}
+                  onClick={() => {
+                    setLocalPart(randomAlias(10));
+                    // Clear inbox from previous alias
+                    setMessages([]);
+                    setDetail(null);
+                    setError('');
+                    setLastRefreshed('');
+                    setMessageFilter(null);
+                    setOtpNotification(null);
+                    setPinRequired(false);
+                    setPinInput('');
+                    setPinVerified(false);
+                    verifiedPinRef.current = '';
+                    prevMessageIdsRef.current = new Set();
+                    setToast('\u2713 Alamat baru dibuat, inbox dibersihkan');
+                  }}
                   disabled={!selectedDomain}
-                  title="Buat alamat baru"
+                  title="Buat alamat baru (inbox akan direset)"
                 >
                   <i className="bi bi-arrow-repeat" />
                   <span className="d-none d-sm-inline">Baru</span>
@@ -613,6 +870,61 @@ export default function HomePage() {
 
               {/* Messages */}
               <div style={{ minHeight: 190 }}>
+                {/* PIN Required Prompt */}
+                {pinRequired && !pinVerified && (
+                  <div style={{ padding: '2.5rem 1.5rem', textAlign: 'center' }}>
+                    <div style={{
+                      width: 56, height: 56, borderRadius: '14px', margin: '0 auto 1rem',
+                      background: `rgba(${t.primaryRgb}, 0.1)`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <i className="bi bi-lock-fill" style={{ fontSize: '1.5rem', color: t.primary }} />
+                    </div>
+                    <p style={{ color: t.textPrimary, fontWeight: 700, marginBottom: '0.3rem', fontSize: '1rem' }}>
+                      Alias Dilindungi PIN
+                    </p>
+                    <p style={{ color: t.textMuted, fontSize: '0.82rem', marginBottom: '1.25rem' }}>
+                      Masukkan PIN untuk membuka inbox alias ini.
+                    </p>
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (pinInput.trim()) refreshInbox(address, { currentPin: pinInput.trim() });
+                      }}
+                      style={{ display: 'flex', gap: '0.5rem', maxWidth: 280, margin: '0 auto' }}
+                    >
+                      <input
+                        type="password"
+                        value={pinInput}
+                        onChange={(e) => setPinInput(e.target.value)}
+                        placeholder="Masukkan PIN"
+                        style={{
+                          flex: 1, border: `1.5px solid ${t.border}`, borderRadius: '10px',
+                          padding: '0.6rem 1rem', fontSize: '0.9rem', outline: 'none',
+                          background: t.cardBg, color: t.textPrimary,
+                          textAlign: 'center', letterSpacing: '0.15em', fontWeight: 600,
+                        }}
+                        autoFocus
+                      />
+                      <button
+                        type="submit"
+                        disabled={!pinInput.trim()}
+                        style={{
+                          ...btnPrimary, padding: '0.6rem 1rem', borderRadius: '10px',
+                        }}
+                      >
+                        <i className="bi bi-unlock-fill" />
+                      </button>
+                    </form>
+                    {error && (
+                      <p style={{ color: '#dc2626', fontSize: '0.8rem', marginTop: '0.75rem' }}>
+                        PIN salah. Coba lagi.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {!pinRequired || pinVerified ? (<>
                 {loading && messages.length === 0 && (
                   <div style={{ padding: '3.5rem 1.5rem', textAlign: 'center', color: t.textMuted }}>
                     <div className="spinner-border spinner-border-sm mb-2" role="status">
@@ -655,7 +967,7 @@ export default function HomePage() {
                           cursor: 'pointer',
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.35rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.75rem' }}>
                           <div style={{ minWidth: 0, flex: 1 }}>
                             <div style={{
                               fontWeight: 600, fontSize: '0.88rem', color: t.textPrimary,
@@ -671,32 +983,47 @@ export default function HomePage() {
                                 {msg.from}
                               </div>
                             )}
+                            <p style={{
+                              margin: '0.35rem 0 0', fontSize: '0.8rem', color: t.textMuted,
+                              overflow: 'hidden', display: '-webkit-box',
+                              WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.5,
+                            }}>
+                              {msg.snippet || '(tidak ada pratinjau)'}
+                            </p>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.4rem', flexShrink: 0 }}>
                             <span style={{ fontSize: '0.73rem', color: t.textMuted, whiteSpace: 'nowrap' }}>
                               {formatMessageDate(msg.date)}
                             </span>
-                            <button
-                              type="button"
-                              style={{ ...btnPrimary, padding: '0.3rem 0.65rem', fontSize: '0.75rem', borderRadius: '7px' }}
-                              onClick={(e) => { e.stopPropagation(); copyOtpFromMessage(msg); }}
-                              title="Salin OTP"
-                            >
-                              <i className="bi bi-clipboard-check" /> OTP
-                            </button>
+                            {(() => {
+                              const otp = extractOtpFromMessage(msg);
+                              if (!otp) return null;
+                              return (
+                                <div
+                                  style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                                    background: `rgba(${t.primaryRgb}, 0.1)`, border: `1px solid rgba(${t.primaryRgb}, 0.3)`,
+                                    borderRadius: '8px', padding: '0.25rem 0.6rem',
+                                    cursor: 'pointer',
+                                  }}
+                                  onClick={(e) => { e.stopPropagation(); copyToClipboard(otp, { successToast: '\u2713 OTP disalin: ' + otp }); }}
+                                  title="Klik untuk salin OTP"
+                                >
+                                  <i className="bi bi-key-fill" style={{ color: t.primary, fontSize: '0.7rem' }} />
+                                  <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.8rem', color: t.primary, letterSpacing: '0.08em' }}>
+                                    {otp}
+                                  </span>
+                                  <i className="bi bi-clipboard" style={{ color: t.primary, fontSize: '0.65rem', opacity: 0.7 }} />
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
-                        <p style={{
-                          margin: 0, fontSize: '0.8rem', color: t.textMuted,
-                          overflow: 'hidden', display: '-webkit-box',
-                          WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', lineHeight: 1.5,
-                        }}>
-                          {msg.snippet || '(tidak ada pratinjau)'}
-                        </p>
                       </div>
                     ))}
                   </div>
                 )}
+                </>) : null}
               </div>
             </div>
 
@@ -792,6 +1119,21 @@ export default function HomePage() {
         color: t.textMuted,
         fontSize: '0.85rem'
       }}>
+        {/* Notification permission button */}
+        {notifPermission === 'default' && (
+          <button
+            onClick={requestNotifPermission}
+            style={{
+              background: 'none', border: `1px solid ${t.border}`, borderRadius: '8px',
+              padding: '0.4rem 0.8rem', fontSize: '0.75rem', color: t.textMuted,
+              cursor: 'pointer', marginBottom: '0.5rem', display: 'inline-flex',
+              alignItems: 'center', gap: '0.35rem',
+            }}
+          >
+            <i className="bi bi-bell" /> Aktifkan notifikasi OTP
+          </button>
+        )}
+        {notifPermission === 'default' && <br />}
         Copyright 2026 |{' '}
         <Link
           href="/docs/api-partner"
@@ -811,15 +1153,92 @@ export default function HomePage() {
         </a>
       </footer>
 
+      {/* OTP Notification Banner */}
+      {otpNotification && (
+        <div style={{
+          position: 'fixed', top: '1rem', left: '50%', transform: 'translateX(-50%)',
+          background: t.gradient,
+          color: '#fff', padding: '1rem 1.5rem', borderRadius: '16px',
+          fontSize: '0.9rem', fontWeight: 500, zIndex: 2100,
+          boxShadow: `0 8px 32px rgba(${t.primaryRgb}, 0.4)`,
+          maxWidth: '90vw', width: 380,
+          animation: 'slideDown 0.3s ease-out',
+        }}>
+          <style>{`
+            @keyframes slideDown {
+              from { transform: translateX(-50%) translateY(-100%); opacity: 0; }
+              to { transform: translateX(-50%) translateY(0); opacity: 1; }
+            }
+            @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+          `}</style>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <i className="bi bi-key-fill" style={{ fontSize: '1.1rem' }} />
+              <span style={{ fontWeight: 700, fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Kode OTP Terdeteksi
+              </span>
+            </div>
+            <button
+              onClick={() => setOtpNotification(null)}
+              style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.8)', cursor: 'pointer', fontSize: '1rem', padding: '0.2rem' }}
+              aria-label="Tutup"
+            >
+              <i className="bi bi-x-lg" />
+            </button>
+          </div>
+          <div style={{
+            background: 'rgba(255,255,255,0.2)', borderRadius: '10px',
+            padding: '0.75rem 1rem', textAlign: 'center', marginBottom: '0.5rem',
+            animation: 'pulse 2s infinite',
+          }}>
+            <span style={{ fontSize: '1.6rem', fontWeight: 800, letterSpacing: '0.15em', fontFamily: 'monospace' }}>
+              {otpNotification.code}
+            </span>
+          </div>
+          <p style={{ margin: '0 0 0.6rem', fontSize: '0.75rem', opacity: 0.9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {otpNotification.from && <><i className="bi bi-person-fill" /> {otpNotification.from}</>}
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              onClick={() => {
+                copyToClipboard(otpNotification.code, { successToast: '\u2713 OTP disalin!' });
+                setOtpNotification(null);
+              }}
+              style={{
+                flex: 1, background: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.4)',
+                color: '#fff', borderRadius: '8px', padding: '0.5rem',
+                fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem',
+              }}
+            >
+              <i className="bi bi-clipboard-check" /> Salin OTP
+            </button>
+            <button
+              onClick={() => setOtpNotification(null)}
+              style={{
+                background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
+                color: 'rgba(255,255,255,0.8)', borderRadius: '8px', padding: '0.5rem 0.75rem',
+                fontSize: '0.82rem', cursor: 'pointer',
+              }}
+            >
+              Tutup
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* â”€â”€ Toast â”€ */}
       {toast && (
         <div style={{
           position: 'fixed', bottom: '1.5rem', left: '50%', transform: 'translateX(-50%)',
-          background: '#1e293b', color: '#f1f5f9',
-          padding: '0.6rem 1.25rem', borderRadius: '100px',
-          fontSize: '0.85rem', fontWeight: 500, zIndex: 2000,
-          boxShadow: '0 4px 20px rgba(0,0,0,0.25)', whiteSpace: 'nowrap',
-          border: '1px solid rgba(255,255,255,0.08)',
+          background: t.dark ? t.cardBg : t.primary,
+          color: '#fff',
+          padding: '0.7rem 1.4rem', borderRadius: '100px',
+          fontSize: '0.85rem', fontWeight: 600, zIndex: 2000,
+          boxShadow: `0 4px 24px rgba(${t.primaryRgb}, 0.35)`,
+          whiteSpace: 'nowrap',
+          border: t.dark ? `1px solid ${t.border}` : 'none',
+          display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
           {toast}
         </div>

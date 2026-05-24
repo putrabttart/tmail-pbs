@@ -1,0 +1,5 @@
+{
+  "/api/messages/route": "app/api/messages/route.js",
+  "/admin/page": "app/admin/page.js",
+  "/[alias]/page": "app/[alias]/page.js"
+}
