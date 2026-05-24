@@ -499,9 +499,15 @@ export default function HomePage({ initialAlias = '' }) {
       setMessages(newMessages);
       setMessageFilter(data.filter || null);
       setLastRefreshed(new Date().toLocaleTimeString());
+      // Clear any previous error when fetch succeeds (including silent polls)
+      if (error) setError('');
     } catch (err) {
       console.error(err);
       if (!silent) setError(err?.message || 'Failed to refresh messages');
+      // For silent polls: only show persistent errors (auth issues)
+      if (silent && err?.message && err.message.includes('Token expired')) {
+        setError(err.message);
+      }
     } finally {
       if (!silent) setLoading(false);
     }
