@@ -165,6 +165,20 @@ export default function AdminPage() {
       setSessionChecked(true);
     };
     ensureSession();
+
+    // Listen for token refresh events (auto-refresh before expiry)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
+        if (session?.access_token) {
+          setAccessToken(session.access_token);
+        }
+      }
+      if (event === 'SIGNED_OUT') {
+        router.replace('/admin/login');
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, [router]);
 
   const fetchWithAdmin = useCallback(async (path, options = {}) => {
@@ -2250,6 +2264,33 @@ export default function AdminPage() {
                   </Link>
                   <button className="btn btn-outline-danger" onClick={revokeToken} disabled={loading}>
                     <i className="bi bi-shield-x me-2" /> Cabut Token
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="col-12 col-lg-6">
+              <div className="admin-panel h-100">
+                <h5 className="mb-3">Gmail Push Notification</h5>
+                <p className="text-muted small">Aktifkan push agar email masuk real-time tanpa polling. Perlu diperbarui setiap 7 hari.</p>
+                <div className="d-grid gap-2">
+                  <button
+                    className="btn btn-success"
+                    disabled={loading}
+                    onClick={async () => {
+                      try {
+                        const data = await fetchWithAdmin('/api/webhooks/gmail/watch', { method: 'POST' });
+                        if (data?.status === 'ok') {
+                          const expDate = data.expiration ? new Date(Number(data.expiration)).toLocaleDateString() : '~7 hari';
+                          setToast(`Gmail Push aktif! Expire: ${expDate}`);
+                        } else {
+                          setToast(data?.error || 'Gagal mengaktifkan push');
+                        }
+                      } catch (err) {
+                        setToast(localizeErrorMessage(err?.message) || 'Gagal mengaktifkan Gmail Push');
+                      }
+                    }}
+                  >
+                    <i className="bi bi-bell-fill me-2" /> Aktifkan Gmail Push
                   </button>
                 </div>
               </div>
