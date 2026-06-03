@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 
 const DEFAULT_DOMAIN = '';
-const AUTO_REFRESH_MS = 10000;
+const AUTO_REFRESH_ACTIVE_MS = 15000;
+const AUTO_REFRESH_BACKGROUND_MS = 30000;
 
 // â”€â”€â”€ Themes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const THEMES = {
@@ -93,6 +94,7 @@ export default function HomePage() {
   const [toast, setToast] = useState('');
   const [messageFilter, setMessageFilter] = useState(null);
   const [theme, setTheme] = useState('blue');
+  const [isPageActive, setIsPageActive] = useState(true);
 
   const t = THEMES[theme] || THEMES.blue;
   const displayedMessages = useMemo(() => (messages || []).slice(0, 3), [messages]);
@@ -346,12 +348,35 @@ export default function HomePage() {
   }
 
   useEffect(() => {
+    const updatePageActivity = () => {
+      setIsPageActive(document.visibilityState === 'visible' && document.hasFocus());
+    };
+
+    updatePageActivity();
+    window.addEventListener('visibilitychange', updatePageActivity);
+    window.addEventListener('focus', updatePageActivity);
+    window.addEventListener('blur', updatePageActivity);
+
+    return () => {
+      window.removeEventListener('visibilitychange', updatePageActivity);
+      window.removeEventListener('focus', updatePageActivity);
+      window.removeEventListener('blur', updatePageActivity);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!address || !address.includes('@')) return undefined;
     registerAlias(address);
     refreshInbox(address);
-    const timer = setInterval(() => refreshInbox(address, { silent: true }), AUTO_REFRESH_MS);
+    const refreshMs = isPageActive ? AUTO_REFRESH_ACTIVE_MS : AUTO_REFRESH_BACKGROUND_MS;
+    const timer = setInterval(() => refreshInbox(address, { silent: true }), refreshMs);
     return () => clearInterval(timer);
-  }, [address]);
+  }, [address, isPageActive]);
+
+  useEffect(() => {
+    if (!isPageActive || !address || !address.includes('@')) return;
+    refreshInbox(address, { silent: true });
+  }, [isPageActive, address]);
 
   useEffect(() => {
     async function loadDomains() {
@@ -634,7 +659,7 @@ export default function HomePage() {
                       Menunggu email masuk...
                     </p>
                     <p style={{ color: t.textMuted, fontSize: '0.8rem', marginBottom: 0 }}>
-                      Refresh otomatis setiap {AUTO_REFRESH_MS / 1000} detik
+                      Refresh otomatis setiap {(isPageActive ? AUTO_REFRESH_ACTIVE_MS : AUTO_REFRESH_BACKGROUND_MS) / 1000} detik
                     </p>
                   </div>
                 )}
@@ -701,7 +726,7 @@ export default function HomePage() {
             </div>
 
             <p style={{ textAlign: 'center', marginTop: '1.25rem', color: t.textMuted, fontSize: '0.78rem', marginBottom: 0 }}>
-              Auto-refresh setiap {AUTO_REFRESH_MS / 1000} detik &bull; Maks 3 pesan terbaru
+              Auto-refresh {(isPageActive ? 'aktif' : 'background')} setiap {(isPageActive ? AUTO_REFRESH_ACTIVE_MS : AUTO_REFRESH_BACKGROUND_MS) / 1000} detik &bull; Maks 3 pesan terbaru
             </p>
           </div>
         </div>
