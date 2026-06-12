@@ -4,4 +4,4 @@ dist
 build
 coverage
 *.log
-.next
+.next/
