@@ -188,7 +188,8 @@ export default function AdminPage() {
     const res = await fetch(path, { cache: 'no-store', ...options, headers });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || `Request failed with ${res.status}`);
+      const suffix = body.code ? ` [${body.code}]` : '';
+      throw new Error(`${body.error || `Request failed with ${res.status}`}${suffix}`);
     }
     return res.json();
   }, [accessToken]);

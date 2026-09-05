@@ -6,7 +6,8 @@ create table if not exists public.app_aliases (
   created_at timestamptz,
   last_used_at timestamptz,
   hits integer not null default 0,
-  active boolean not null default true
+  active boolean not null default true,
+  pin_hash text
 );
 
 create table if not exists public.app_domains (
