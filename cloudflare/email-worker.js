@@ -1,4 +1,15 @@
 export default {
+  async fetch(request, env) {
+    return Response.json({
+      ok: true,
+      worker: 'tmail-email-worker',
+      hasAppWebhookUrl: Boolean(env.APP_WEBHOOK_URL),
+      hasWebhookSecret: Boolean(env.WEBHOOK_SECRET),
+      hasBackupEmail: Boolean(env.BACKUP_EMAIL),
+      appWebhookUrl: env.APP_WEBHOOK_URL || null
+    });
+  },
+
   async email(message, env, ctx) {
     if (!env.APP_WEBHOOK_URL || !env.WEBHOOK_SECRET) {
       console.error('Missing APP_WEBHOOK_URL or WEBHOOK_SECRET Worker variable');
@@ -43,7 +54,7 @@ export default {
     const results = await Promise.allSettled(jobs);
     const saveResult = results[0];
     if (saveResult.status === 'rejected') {
-      console.error('Failed to save inbound email:', saveResult.reason);
+      console.error('Failed to save inbound email:', formatWorkerError(saveResult.reason));
     } else if (!saveResult.value.ok) {
       console.error('App webhook returned', saveResult.value.status, await saveResult.value.text());
     } else {
@@ -52,7 +63,7 @@ export default {
 
     const forwardResult = results[1];
     if (forwardResult?.status === 'rejected') {
-      console.error('Failed to forward inbound email:', forwardResult.reason);
+      console.error('Failed to forward inbound email:', formatWorkerError(forwardResult.reason));
     }
   }
 };
@@ -65,4 +76,8 @@ function arrayBufferToBase64(buffer) {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
   }
   return btoa(binary);
+}
+
+function formatWorkerError(error) {
+  return String(error?.stack || error?.message || error || 'unknown error');
 }
