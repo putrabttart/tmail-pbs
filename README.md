@@ -6,7 +6,7 @@ Aplikasi temporary email berbasis Next.js 14 (App Router) dengan UI publik, dash
 
 ### User (Publik)
 - Generate alias email instan dengan domain pilihan
-- Inbox real-time (polling 4 detik + SSE push notification)
+- Inbox berbasis Supabase dari Cloudflare Email Worker
 - Ekstraksi OTP otomatis dari email masuk (badge + notifikasi)
 - Notifikasi suara & browser notification saat OTP terdeteksi
 - Copy OTP sekali klik
@@ -36,17 +36,17 @@ Aplikasi temporary email berbasis Next.js 14 (App Router) dengan UI publik, dash
 - Polling OTP dengan `waitSeconds`
 
 ### Keamanan
-- Token Gmail terenkripsi AES-128-CBC (opsional)
-- Proactive token refresh (5 menit sebelum expire)
-- Preserve refresh_token saat auto-refresh
-- OAuth state CSRF protection (TTL 10 menit)
+- Webhook Cloudflare Email dilindungi shared secret
+- Token Gmail terenkripsi AES-128-CBC (opsional, untuk fallback Gmail API)
+- OAuth state CSRF protection (TTL 10 menit, jika Gmail API dipakai)
 - Input validation (Zod)
 - Audit trail admin actions
 - PIN alias (SHA-256 hashed, timing-safe comparison)
 
 ### Performa & Reliability
-- Message cache (TTL 30 detik)
-- SSE real-time push (via Gmail Pub/Sub webhook)
+- Inbox query langsung dari Supabase, tanpa Gmail API untuk refresh normal
+- Gmail API fallback dibatasi cache, deduplication, dan concurrency
+- SSE real-time push saat Worker menyimpan email masuk
 - Stale response detection (discard jika alias berubah)
 - Upsert-based storage (no data loss dari race condition)
 - Structured JSON logging
@@ -61,7 +61,7 @@ Aplikasi temporary email berbasis Next.js 14 (App Router) dengan UI publik, dash
 | Backend | Next.js API Routes (Node.js runtime) |
 | Auth Admin | Supabase Auth (email/password) |
 | Auth Partner | API Key (SHA-256 + pepper) |
-| Email Source | Gmail API (read-only) via Google OAuth2 |
+| Email Source | Cloudflare Email Worker -> Supabase (`app_messages`) |
 | Storage | Supabase PostgreSQL |
 | Validation | Zod |
 | Deploy | Vercel + Cloudflare DNS/Email Routing |
@@ -162,6 +162,8 @@ supabase/
 
 ## Variabel Lingkungan
 
+Template lengkap tersedia di [`env.example`](env.example). Setup production lengkap tersedia di [`SETUP.md`](SETUP.md).
+
 ```env
 # Google OAuth (opsional jika masih memakai Gmail API fallback)
 GOOGLE_CLIENT_ID=
@@ -211,52 +213,18 @@ npm run dev
 - Admin: http://localhost:3000/admin/login
 - API Docs: http://localhost:3000/docs/api-partner
 
-## Setup Supabase
+## Setup Production
 
-1. Buat project Supabase
-2. Aktifkan Email/Password Auth
-3. Buat user admin (Auth → Users), auto-confirm
-4. Jalankan semua migration SQL di `supabase/migrations/` secara berurutan
-5. Set env variables Supabase
+Ikuti panduan lengkap di [`SETUP.md`](SETUP.md). Ringkasnya:
 
-## Setup Google OAuth (Opsional, Gmail API Fallback)
+1. Jalankan migration Supabase, terutama `20260912_0001_cloudflare_email_messages.sql`.
+2. Set environment Vercel dari [`env.example`](env.example).
+3. Deploy app dan pastikan `GET /api/webhooks/cloudflare-email` merespons `ok: true`.
+4. Deploy `cloudflare/email-worker.js`, lalu set `APP_WEBHOOK_URL`, `WEBHOOK_SECRET`, dan opsional `BACKUP_EMAIL`.
+5. Arahkan Cloudflare Email Routing catch-all ke Worker.
+6. Tambahkan domain email di admin TMail dan kirim email test.
 
-1. Buat project di Google Cloud Console
-2. Enable Gmail API
-3. Buat OAuth Client (Web Application)
-4. Set Authorized redirect URIs: `http://localhost:3000/oauth2callback`
-5. **Penting**: Publish app (OAuth consent screen → Publish) agar refresh token tidak expire 7 hari
-6. Set env: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`
-7. Buka `/login` untuk autentikasi pertama kali
-
-## Setup Cloudflare Email Routing
-
-1. Tambahkan domain ke Cloudflare
-2. Aktifkan Email Routing
-3. Set MX records:
-   - `route1.mx.cloudflare.net` (priority 49)
-   - `route2.mx.cloudflare.net` (priority 50)
-   - `route3.mx.cloudflare.net` (priority 50)
-4. Set TXT SPF: `v=spf1 include:_spf.mx.cloudflare.net ~all`
-5. Untuk mode sederhana, buat route: `*@domain.com` → destination email (Gmail)
-6. Untuk mode tmail produksi, gunakan Cloudflare Email Worker agar email disimpan ke Supabase dan tetap bisa diforward ke Gmail backup
-7. Tambahkan domain di admin dashboard
-
-## Setup Cloudflare Email Worker (Direkomendasikan)
-
-Mode ini menjadikan Supabase `app_messages` sebagai inbox utama sehingga refresh user tidak lagi bergantung ke Gmail API.
-
-1. Jalankan migration `20260912_0001_cloudflare_email_messages.sql`
-2. Set env aplikasi: `CLOUDFLARE_EMAIL_WEBHOOK_SECRET` dan `SUPABASE_TABLE_MESSAGES=app_messages`
-3. Deploy Worker dari `cloudflare/email-worker.js`
-4. Set Worker variables/secrets:
-   - `APP_WEBHOOK_URL=https://domain-app.com/api/webhooks/cloudflare-email`
-   - `WEBHOOK_SECRET` sama dengan `CLOUDFLARE_EMAIL_WEBHOOK_SECRET`
-   - `BACKUP_EMAIL=alamatgmail@gmail.com` jika email tetap ingin masuk Gmail
-5. Arahkan catch-all Email Routing ke Worker
-6. Tes kirim email ke alias dan cek table `app_messages`
-
-Dokumentasi lengkap: [`docs/cloudflare-email-worker.md`](docs/cloudflare-email-worker.md)
+Dokumentasi Worker terpisah tersedia di [`docs/cloudflare-email-worker.md`](docs/cloudflare-email-worker.md).
 
 ## Gmail Push Notification (Opsional)
 
@@ -280,7 +248,7 @@ Untuk real-time email tanpa polling:
 | GET | `/api/aliases/check-pin?alias=` | Cek PIN requirement |
 | GET | `/api/theme` | Current theme |
 | GET | `/api/messages/stream?alias=` | SSE real-time |
-| POST | `/api/webhooks/cloudflare-email` | Webhook inbound Cloudflare Email Worker |
+| GET/POST | `/api/webhooks/cloudflare-email` | Health check / webhook inbound Cloudflare Email Worker |
 
 ### Admin (Bearer token)
 | Method | Path | Fungsi |
@@ -322,8 +290,8 @@ Untuk real-time email tanpa polling:
 1. Push ke GitHub
 2. Import project di Vercel
 3. Set semua environment variables
-4. Pastikan `GOOGLE_REDIRECT_URI` pakai domain produksi
-5. Deploy
+4. Set `CLOUDFLARE_EMAIL_WEBHOOK_SECRET` dan Supabase server env
+5. Deploy, lalu ikuti setup Cloudflare di [`SETUP.md`](SETUP.md)
 
 ## Troubleshooting
 
@@ -334,6 +302,7 @@ Untuk real-time email tanpa polling:
 | Token sering expire | Publish app di Google Cloud (bukan Testing mode) |
 | Email tidak masuk | Cek MX, SPF, dan route di Cloudflare |
 | Email masuk Gmail tapi tidak muncul di UI | Cek Worker route, Worker logs, secret webhook, dan table `app_messages` |
+| Worker health `hasAppWebhookUrl: false` | Tambahkan `APP_WEBHOOK_URL` di Cloudflare Worker variables lalu deploy ulang |
 | PIN tidak tersimpan | Jalankan migration `20260524_0001_alias_pin.sql` |
 | Alias hilang dari DB | Sudah diperbaiki — storage pakai upsert, bukan delete+insert |
 
