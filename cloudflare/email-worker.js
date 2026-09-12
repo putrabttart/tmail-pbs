@@ -1,11 +1,24 @@
 export default {
   async email(message, env, ctx) {
+    if (!env.APP_WEBHOOK_URL || !env.WEBHOOK_SECRET) {
+      console.error('Missing APP_WEBHOOK_URL or WEBHOOK_SECRET Worker variable');
+      if (env.BACKUP_EMAIL) await message.forward(env.BACKUP_EMAIL);
+      return;
+    }
+
     const raw = await new Response(message.raw).arrayBuffer();
     const rawBase64 = arrayBufferToBase64(raw);
     const headers = {};
     for (const [key, value] of message.headers) {
       headers[key] = value;
     }
+
+    console.log('Inbound email received', {
+      from: message.from,
+      to: message.to,
+      rawSize: raw.byteLength,
+      hasBackupEmail: Boolean(env.BACKUP_EMAIL)
+    });
 
     const saveToApp = fetch(env.APP_WEBHOOK_URL, {
       method: 'POST',
@@ -33,6 +46,13 @@ export default {
       console.error('Failed to save inbound email:', saveResult.reason);
     } else if (!saveResult.value.ok) {
       console.error('App webhook returned', saveResult.value.status, await saveResult.value.text());
+    } else {
+      console.log('Inbound email saved to app', await saveResult.value.text());
+    }
+
+    const forwardResult = results[1];
+    if (forwardResult?.status === 'rejected') {
+      console.error('Failed to forward inbound email:', forwardResult.reason);
     }
   }
 };

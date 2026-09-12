@@ -126,6 +126,28 @@ Worker mengirim email ke:
 POST /api/webhooks/cloudflare-email
 ```
 
+Health check webhook tersedia di:
+
+```text
+GET /api/webhooks/cloudflare-email
+```
+
+Response sehat contoh:
+
+```json
+{
+  "ok": true,
+  "webhookSecretConfigured": true,
+  "useSupabaseStorage": true,
+  "table": "app_messages",
+  "messagesTable": {
+    "ok": true,
+    "error": null,
+    "count": 0
+  }
+}
+```
+
 Header wajib:
 
 ```text
@@ -183,6 +205,7 @@ Setelah Worker stabil, polling Gmail bisa dibuat lebih jarang atau fallback bisa
 | 400 invalid recipient alias | `message.to` bukan email domain yang valid | Pastikan routing rule mengirim alamat tujuan asli |
 | Domain not allowed | Domain belum aktif di admin app | Tambahkan domain di dashboard admin |
 | Pesan tidak muncul di UI | Migration belum jalan atau Worker belum route | Cek table `app_messages`, Worker logs, dan route Email Routing |
+| Email masuk Gmail tapi `app_messages` kosong | Worker forward berhasil tapi POST ke app gagal atau tidak terpanggil | Cek Worker logs, `APP_WEBHOOK_URL`, `WEBHOOK_SECRET`, dan `GET /api/webhooks/cloudflare-email` |
 | Email tidak masuk Gmail | `BACKUP_EMAIL` kosong atau forward gagal | Isi `BACKUP_EMAIL` dan pastikan destination address terverifikasi |
 | Supabase schema cache error | Migration baru belum terbaca PostgREST | Jalankan `notify pgrst, 'reload schema';` |
 
