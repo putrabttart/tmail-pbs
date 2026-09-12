@@ -107,9 +107,11 @@ app/
 │   │   ├── messages/[id]/route.js
 │   │   ├── otp/route.js        # GET: poll OTP
 │   │   └── health/route.js     # GET: key health
-│   └── webhooks/gmail/
-│       ├── route.js            # POST: Gmail push notification
-│       └── watch/route.js      # POST: setup Gmail watch
+│   └── webhooks/
+│       ├── cloudflare-email/route.js # POST: inbound Email Worker
+│       └── gmail/
+│           ├── route.js        # POST: Gmail push notification
+│           └── watch/route.js  # POST: setup Gmail watch
 ├── auth/
 │   ├── url/route.js            # GET: OAuth URL
 │   └── revoke/route.js         # POST: revoke token
@@ -131,7 +133,8 @@ supabase/
 │   ├── 20260204_0001_app_kv.sql
 │   ├── 20260206_0001_app_tables.sql
 │   ├── 20260421_0001_partner_api.sql
-│   └── 20260524_0001_alias_pin.sql
+│   ├── 20260524_0001_alias_pin.sql
+│   └── 20260912_0001_cloudflare_email_messages.sql
 ├── schema.template.sql
 └── schema.tables.template.sql
 ```
@@ -144,6 +147,7 @@ supabase/
 | `app_aliases` | Alias email (address, hits, active, pin_hash) |
 | `app_domains` | Domain yang diizinkan |
 | `app_logs` | Log email masuk per alias |
+| `app_messages` | Inbox utama dari Cloudflare Email Worker |
 | `app_audit` | Audit trail admin actions |
 | `app_api_keys` | Partner API keys |
 | `app_partner_aliases` | Alias milik partner |
@@ -153,13 +157,13 @@ supabase/
 
 - Node.js 18+
 - Akun Supabase (Auth + Database)
-- Akun Google Cloud (Gmail API)
+- Akun Google Cloud (Gmail API, opsional untuk fallback/backup lama)
 - Domain + Cloudflare (Email Routing)
 
 ## Variabel Lingkungan
 
 ```env
-# Google OAuth (wajib)
+# Google OAuth (opsional jika masih memakai Gmail API fallback)
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 GOOGLE_REDIRECT_URI=http://localhost:3000/oauth2callback
@@ -178,6 +182,7 @@ SUPABASE_KV_TABLE=app_kv
 SUPABASE_TABLE_ALIASES=app_aliases
 SUPABASE_TABLE_DOMAINS=app_domains
 SUPABASE_TABLE_LOGS=app_logs
+SUPABASE_TABLE_MESSAGES=app_messages
 SUPABASE_TABLE_AUDIT=app_audit
 SUPABASE_TABLE_API_KEYS=app_api_keys
 SUPABASE_TABLE_PARTNER_ALIASES=app_partner_aliases
@@ -192,6 +197,7 @@ PARTNER_KEY_PEPPER=
 PARTNER_DEFAULT_RATE_LIMIT=60
 PARTNER_MAX_WAIT_SECONDS=20
 GMAIL_PUBSUB_TOPIC=             # projects/<id>/topics/gmail-push
+CLOUDFLARE_EMAIL_WEBHOOK_SECRET= # secret untuk Email Worker webhook
 ```
 
 ## Instalasi
@@ -213,7 +219,7 @@ npm run dev
 4. Jalankan semua migration SQL di `supabase/migrations/` secara berurutan
 5. Set env variables Supabase
 
-## Setup Google OAuth (Gmail API)
+## Setup Google OAuth (Opsional, Gmail API Fallback)
 
 1. Buat project di Google Cloud Console
 2. Enable Gmail API
@@ -232,8 +238,25 @@ npm run dev
    - `route2.mx.cloudflare.net` (priority 50)
    - `route3.mx.cloudflare.net` (priority 50)
 4. Set TXT SPF: `v=spf1 include:_spf.mx.cloudflare.net ~all`
-5. Buat route: `*@domain.com` → destination email (Gmail)
-6. Tambahkan domain di admin dashboard
+5. Untuk mode sederhana, buat route: `*@domain.com` → destination email (Gmail)
+6. Untuk mode tmail produksi, gunakan Cloudflare Email Worker agar email disimpan ke Supabase dan tetap bisa diforward ke Gmail backup
+7. Tambahkan domain di admin dashboard
+
+## Setup Cloudflare Email Worker (Direkomendasikan)
+
+Mode ini menjadikan Supabase `app_messages` sebagai inbox utama sehingga refresh user tidak lagi bergantung ke Gmail API.
+
+1. Jalankan migration `20260912_0001_cloudflare_email_messages.sql`
+2. Set env aplikasi: `CLOUDFLARE_EMAIL_WEBHOOK_SECRET` dan `SUPABASE_TABLE_MESSAGES=app_messages`
+3. Deploy Worker dari `cloudflare/email-worker.js`
+4. Set Worker variables/secrets:
+   - `APP_WEBHOOK_URL=https://domain-app.com/api/webhooks/cloudflare-email`
+   - `WEBHOOK_SECRET` sama dengan `CLOUDFLARE_EMAIL_WEBHOOK_SECRET`
+   - `BACKUP_EMAIL=alamatgmail@gmail.com` jika email tetap ingin masuk Gmail
+5. Arahkan catch-all Email Routing ke Worker
+6. Tes kirim email ke alias dan cek table `app_messages`
+
+Dokumentasi lengkap: [`docs/cloudflare-email-worker.md`](docs/cloudflare-email-worker.md)
 
 ## Gmail Push Notification (Opsional)
 
@@ -257,6 +280,7 @@ Untuk real-time email tanpa polling:
 | GET | `/api/aliases/check-pin?alias=` | Cek PIN requirement |
 | GET | `/api/theme` | Current theme |
 | GET | `/api/messages/stream?alias=` | SSE real-time |
+| POST | `/api/webhooks/cloudflare-email` | Webhook inbound Cloudflare Email Worker |
 
 ### Admin (Bearer token)
 | Method | Path | Fungsi |
@@ -309,6 +333,7 @@ Untuk real-time email tanpa polling:
 | OAuth `redirect_uri_mismatch` | Samakan `GOOGLE_REDIRECT_URI` dengan Google Console |
 | Token sering expire | Publish app di Google Cloud (bukan Testing mode) |
 | Email tidak masuk | Cek MX, SPF, dan route di Cloudflare |
+| Email masuk Gmail tapi tidak muncul di UI | Cek Worker route, Worker logs, secret webhook, dan table `app_messages` |
 | PIN tidak tersimpan | Jalankan migration `20260524_0001_alias_pin.sql` |
 | Alias hilang dari DB | Sudah diperbaiki — storage pakai upsert, bukan delete+insert |
 

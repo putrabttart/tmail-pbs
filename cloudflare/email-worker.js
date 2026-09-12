@@ -1,0 +1,48 @@
+export default {
+  async email(message, env, ctx) {
+    const raw = await new Response(message.raw).arrayBuffer();
+    const rawBase64 = arrayBufferToBase64(raw);
+    const headers = {};
+    for (const [key, value] of message.headers) {
+      headers[key] = value;
+    }
+
+    const saveToApp = fetch(env.APP_WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Webhook-Secret': env.WEBHOOK_SECRET
+      },
+      body: JSON.stringify({
+        from: message.from,
+        to: message.to,
+        alias: message.to,
+        headers,
+        rawBase64
+      })
+    });
+
+    const jobs = [saveToApp];
+    if (env.BACKUP_EMAIL) {
+      jobs.push(message.forward(env.BACKUP_EMAIL));
+    }
+
+    const results = await Promise.allSettled(jobs);
+    const saveResult = results[0];
+    if (saveResult.status === 'rejected') {
+      console.error('Failed to save inbound email:', saveResult.reason);
+    } else if (!saveResult.value.ok) {
+      console.error('App webhook returned', saveResult.value.status, await saveResult.value.text());
+    }
+  }
+};
+
+function arrayBufferToBase64(buffer) {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}

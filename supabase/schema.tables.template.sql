@@ -26,6 +26,28 @@ create table if not exists public.app_logs (
   last_seen_at timestamptz
 );
 
+create table if not exists public.app_messages (
+  id text primary key,
+  alias text not null,
+  from_email text,
+  to_email text,
+  subject text,
+  date timestamptz,
+  snippet text,
+  body_text text,
+  body_html text,
+  raw text,
+  headers jsonb not null default '{}'::jsonb,
+  source text not null default 'cloudflare_email_worker',
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_app_messages_alias_created_at
+on public.app_messages(alias, created_at desc);
+
+create index if not exists idx_app_messages_created_at
+on public.app_messages(created_at desc);
+
 create table if not exists public.app_audit (
   id bigint generated always as identity primary key,
   timestamp timestamptz not null,
@@ -74,6 +96,7 @@ create table if not exists public.app_partner_access_logs (
 alter table public.app_aliases disable row level security;
 alter table public.app_domains disable row level security;
 alter table public.app_logs disable row level security;
+alter table public.app_messages disable row level security;
 alter table public.app_audit disable row level security;
 alter table public.app_api_keys disable row level security;
 alter table public.app_partner_aliases disable row level security;
